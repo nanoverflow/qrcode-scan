@@ -103,17 +103,25 @@ $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-17.0.21.21-hotspot"
 .\scripts\publish-release.ps1 -Version 0.1.0 -Draft
 ```
 
-### CI 自动发布
+### CI（push 自动构建）
 
-推送 tag 或手动触发 Actions：
+推送 `main` / 开 PR 会跑 `.github/workflows/ci.yml`：
+
+- Windows：编译 Qt 发送端  
+- Ubuntu：编译 Android 接收端 APK  
+
+产物在 Actions → 对应 run → Artifacts。
+
+### CI 自动发 Release
+
+推送 **tag**（或 Actions 里手动 `Release`）才会跑 `.github/workflows/release.yml`：
 
 ```powershell
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-工作流：`.github/workflows/release.yml`  
-会分别构建 Windows Qt ZIP 与 Android APK，并创建 GitHub Release 挂上这两个文件。
+会构建并创建 GitHub Release，挂上 ZIP + APK 两个文件。
 
 ## 许可证
 

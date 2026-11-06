@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-qt-windows:
+    name: Build Qt Sender (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Cache OpenCV Windows
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: deps/opencv-windows
+          key: opencv-4.14.0-windows-selfextract
+
+      - name: Download OpenCV Windows
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          $exe = "deps/opencv-4.14.0-windows.exe"
+          curl.exe -L --retry 5 -o $exe "https://github.com/opencv/opencv/releases/download/4.14.0/opencv-4.14.0-windows.exe"
+          7z x $exe "-odeps/opencv-windows" -y
+
+      - name: Configure & build
+        shell: pwsh
+        run: |
+          $opencvRoot = Get-ChildItem deps/opencv-windows -Directory | Select-Object -First 1
+          $opencv = Join-Path $opencvRoot.FullName "build"
+          if (-not (Test-Path "$opencv\OpenCVConfig.cmake")) {
+            $cfg = Get-ChildItem deps/opencv-windows -Recurse -Filter OpenCVConfig.cmake |
+              Where-Object { $_.DirectoryName -match '[\\/]build$' } |
+              Select-Object -First 1
+            $opencv = $cfg.DirectoryName
+          }
+          cmake -S qt-sender -B qt-sender/build -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR;$opencv" `
+            "-DOpenCV_DIR=$opencv"
+          cmake --build qt-sender/build --config Release --parallel
+          Test-Path qt-sender/build/Release/cimbar_qt_sender.exe | ForEach-Object {
+            if (-not $_) { throw "cimbar_qt_sender.exe missing" }
+          }
+
+      - name: Upload exe (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cimbar-qt-sender-exe
+          path: qt-sender/build/Release/cimbar_qt_sender.exe
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android Receiver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-34" "build-tools;35.0.1"
+
+      - name: Cache OpenCV Android
+        id: cache-ocv
+        uses: actions/cache@v4
+        with:
+          path: deps/OpenCV-android-sdk
+          key: opencv-4.12.0-android-sdk
+
+      - name: Download OpenCV Android SDK
+        if: steps.cache-ocv.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p deps
+          curl -L --retry 5 -o deps/opencv-android.zip \
+            https://github.com/opencv/opencv/releases/download/4.12.0/opencv-4.12.0-android-sdk.zip
+          unzip -q deps/opencv-android.zip -d deps
+
+      - name: Ensure CFC web assets
+        working-directory: cfc
+        run: |
+          git submodule update --init --recursive || true
+          if [ ! -f app/src/main/assets/index.html ]; then
+            rm -rf app/src/main/assets
+            git clone --depth 1 https://github.com/sz3/cimbar-js-bits.git app/src/main/assets
+          fi
+
+      - name: Configure Gradle
+        run: |
+          cat > cfc/gradle.properties <<EOF
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          android.enableJetifier=true
+          opencvsdk=${{ github.workspace }}/deps/OpenCV-android-sdk
+          EOF
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > cfc/local.properties
+
+      - name: Assemble Debug APK
+        working-directory: cfc
+        run: chmod +x gradlew && ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: cimbar-receiver-apk
+          path: cfc/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
