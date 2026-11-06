@@ -250,13 +250,16 @@ jobs:
           tag_name: v${{ needs.build-qt-windows.outputs.version }}
           name: Cimbar bar-code v${{ needs.build-qt-windows.outputs.version }}
           draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
             dist/release/CimbarQtSender-windows-x64-*.zip
             dist/release/CimbarReceiver-arm64-v8a-*.apk
           body: |
-            ## 发布文件（2）
+            ## 正式发布（tag）
+
             | 文件 | 说明 |
             |------|------|
             | `CimbarQtSender-windows-x64-*.zip` | Windows Qt 发送端 |
@@ -265,5 +268,7 @@ jobs:
             ### 用法
             1. 解压 ZIP，运行 `cimbar_qt_sender.exe`
             2. 安装 APK，摄像头对准屏幕接收
+
+            > 日常 push 产生的构建见 Pre-release：**beta**
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

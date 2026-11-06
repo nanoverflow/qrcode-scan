@@ -1,5 +1,7 @@
-name: CI
+name: Beta
 
+# push main → 构建并发布 GitHub Pre-release（tag: beta）
+# PR → 只构建，不发布
 on:
   push:
     branches: [main, master]
@@ -8,8 +10,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: beta-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build-qt-windows:
@@ -50,19 +55,16 @@ jobs:
           $exe = "deps/opencv-4.14.0-windows.exe"
           curl.exe -L --retry 5 -o $exe "https://github.com/opencv/opencv/releases/download/4.14.0/opencv-4.14.0-windows.exe"
           7z x $exe "-odeps/opencv-windows" -y
-          Get-ChildItem deps/opencv-windows -Recurse -Depth 3 | Select-Object -First 40 FullName
 
-      - name: Configure & build
+      - name: Build & package Qt ZIP
         shell: pwsh
         run: |
           $cfg = Get-ChildItem deps/opencv-windows -Recurse -Filter OpenCVConfig.cmake |
             Where-Object { $_.DirectoryName -match '[\\/]build$' } |
             Select-Object -First 1
-          if (-not $cfg) { throw "OpenCVConfig.cmake not found under deps/opencv-windows" }
+          if (-not $cfg) { throw "OpenCVConfig.cmake not found" }
           $opencv = $cfg.DirectoryName
-          Write-Host "OpenCV_DIR=$opencv"
-          Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
-          if (-not $env:QT_ROOT_DIR) { throw "QT_ROOT_DIR is empty (install-qt-action failed?)" }
+          if (-not $env:QT_ROOT_DIR) { throw "QT_ROOT_DIR is empty" }
 
           cmake -S qt-sender -B qt-sender/build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
@@ -71,21 +73,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build qt-sender/build --parallel
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
-          if (-not (Test-Path qt-sender/build/cimbar_qt_sender.exe)) {
-            # Ninja single-config puts exe in build/; multi-config would use Release/
-            if (-not (Test-Path qt-sender/build/Release/cimbar_qt_sender.exe)) {
-              Get-ChildItem qt-sender/build -Recurse -Filter cimbar_qt_sender.exe | ForEach-Object FullName
-              throw "cimbar_qt_sender.exe missing"
-            }
+
+          $exe = "qt-sender/build/cimbar_qt_sender.exe"
+          if (-not (Test-Path $exe)) { $exe = "qt-sender/build/Release/cimbar_qt_sender.exe" }
+          if (-not (Test-Path $exe)) { throw "cimbar_qt_sender.exe missing" }
+
+          $stage = "qt-sender/build/Release"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          if ((Resolve-Path (Split-Path $exe -Parent)).Path -ne (Resolve-Path $stage).Path) {
+            Copy-Item $exe $stage -Force
           }
 
-      - name: Upload exe (unsigned)
-        uses: actions/upload-artifact@v4
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" "$stage\cimbar_qt_sender.exe" --release
+          $dll = Get-ChildItem deps/opencv-windows -Recurse -Filter "opencv_world*.dll" |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]vc16[\\/]bin[\\/]' -and $_.Name -notmatch 'd\.dll$' } |
+            Select-Object -First 1
+          if (-not $dll) {
+            $dll = Get-ChildItem deps/opencv-windows -Recurse -Filter "opencv_world*.dll" |
+              Where-Object { $_.Name -notmatch 'd\.dll$' } | Select-Object -First 1
+          }
+          if (-not $dll) { throw "opencv_world DLL not found" }
+          Copy-Item $dll.FullName $stage -Force
+
+          .\scripts\package-release.ps1 -Version "beta" -QtOnly
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: cimbar-qt-sender-exe
-          path: |
-            qt-sender/build/cimbar_qt_sender.exe
-            qt-sender/build/Release/cimbar_qt_sender.exe
+          name: qt-sender-windows-beta
+          path: dist/release/CimbarQtSender-windows-x64-*.zip
           if-no-files-found: error
 
   build-android:
@@ -156,9 +171,66 @@ jobs:
         working-directory: cfc
         run: chmod +x gradlew && ./gradlew :app:assembleDebug --no-daemon
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Stage APK
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          src=$(ls cfc/app/build/outputs/apk/debug/*.apk | head -n1)
+          cp "$src" "dist/release/CimbarReceiver-arm64-v8a-vbeta.apk"
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: cimbar-receiver-apk
-          path: cfc/app/build/outputs/apk/debug/*.apk
+          name: android-receiver-beta
+          path: dist/release/CimbarReceiver-arm64-v8a-*.apk
           if-no-files-found: error
+
+  publish-beta:
+    name: Publish Beta Pre-release
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [build-qt-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          find artifacts -type f \( -name 'CimbarQtSender-windows-x64-*.zip' -o -name 'CimbarReceiver-arm64-v8a-*.apk' \) \
+            -exec cp -v {} dist/release/ \;
+          ls -la dist/release
+          test "$(ls dist/release | wc -l)" -ge 2
+          echo "SHA_SHORT=$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_ENV"
+
+      - name: Publish / update beta pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: beta
+          target_commitish: ${{ github.sha }}
+          name: Beta (continuous)
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/release/CimbarQtSender-windows-x64-*.zip
+            dist/release/CimbarReceiver-arm64-v8a-*.apk
+          body: |
+            ## Beta 预发布（push 自动更新）
+
+            - 提交：`${{ github.sha }}`
+            - 分支：`${{ github.ref_name }}`
+            - 此 Release 标记为 **Pre-release**，每次 push 到 `main` 会覆盖更新
+
+            | 文件 | 说明 |
+            |------|------|
+            | `CimbarQtSender-windows-x64-vbeta.zip` | Windows Qt 发送端 |
+            | `CimbarReceiver-arm64-v8a-vbeta.apk` | Android 接收端（arm64） |
+
+            正式版请打 tag：`git tag vX.Y.Z && git push origin vX.Y.Z`
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
