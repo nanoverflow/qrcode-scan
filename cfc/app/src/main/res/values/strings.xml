@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Cimbar 接收端</string>
+    <string name="mode_4c">Mode 4C</string>
+    <string name="mode_b">Mode B</string>
+    <string name="mode_bm">Mode Bm</string>
+    <string name="mode_bu">Mode Bu</string>
+    <string name="stats_title">接收统计</string>
+    <string name="stats_placeholder">等待摄像头帧…</string>
+    <string name="reset_stats">重置统计</string>
+</resources>

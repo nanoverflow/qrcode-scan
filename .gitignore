@@ -1,0 +1,18 @@
+**/build/
+**/build-*/
+**/cmake-build-*/
+**/.gradle/
+**/local.properties
+cfc/gradle.properties
+**/captures/
+**/.idea/
+**/*.iml
+**/.cxx/
+# Large local SDKs / downloads (OpenCV Android ~GB)
+deps/
+qt-sender/build/
+dist/
+*.user
+*.aps
+.DS_Store
+Thumbs.db

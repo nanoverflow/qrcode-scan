@@ -1,0 +1,9 @@
+org.gradle.jvmargs=-Xmx2048m
+android.useAndroidX=true
+android.enableJetifier=true
+
+# Absolute path to extracted OpenCV Android SDK (contains sdk/)
+opencvsdk=D:/develop/bar-code/deps/OpenCV-android-sdk
+
+# JDK 17 home (required; Android Studio JBR 25 is too new for Gradle 8.2)
+org.gradle.java.home=C:/Program Files/Microsoft/jdk-17.0.21.21-hotspot
